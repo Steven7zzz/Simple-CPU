@@ -1,0 +1,146 @@
+// Name and UIN
+//Haodong Luo 831006011
+
+CHIP CPU{
+
+    IN  fromM[16],          // M value input  (M = contents of RAM[Address])
+        In[16],    	        // Instruction for execution
+        Reset;              // Signals whether to re-start the current
+                            // program (Reset==1) or continue executing
+                            // the current program (Reset==0).
+
+    OUT toM[16],            // M value output
+        writeM,             // Write to M 
+        addressM[16],       // Address in data memory (of M)
+        PCOut[16];          // address of next instruction
+
+    PARTS:
+    // Instruction bits along with the inverted versions
+    
+    Not(in=In[0], out=inverted0);
+    Not(in=In[1], out=inverted1);
+    Not(in=In[2], out=inverted2);
+    Not(in=In[3], out=inverted3);
+    Not(in=In[4], out=inverted4);
+    Not(in=In[5], out=inverted5);
+    Not(in=In[6], out=inverted6);
+    Not(in=In[7], out=inverted7);
+    Not(in=In[8], out=inverted8);
+    Not(in=In[9], out=inverted9);
+    Not(in=In[10], out=inverted10);
+    Not(in=In[11], out=inverted11);
+    Not(in=In[12], out=inverted12);
+    Not(in=In[13], out=inverted13);
+    Not(in=In[14], out=inverted14);
+    Not(in=In[15], out=inverted15);
+
+    Mux16(a=ALUout, b=fromM, sel=In[15], out=Regin);
+    // in[15] = 0 -> ALU, else memory 
+
+    // 1. Register control //
+
+    // arithmetic and logical -> in[15] is 0, (memory, branch, input/output) -> in[15] is 1
+    // only read when 1000 and input when 1110 
+
+    And(a=In[15], b=inverted14, out=readcode);
+    And(a=inverted13, b=inverted12, out=readtype);
+    And(a=readcode, b=readtype, out=readload);
+    // 1000 read
+
+    And(a=In[15], b=In[14], out=inputcode);
+    And(a=In[13], b=inverted12, out=inputtype);
+    And(a=inputcode, b=inputtype, out=inputload);
+    // 1110 input
+
+    Or(a=readload, b=inputload, out=loadmem); // read and input
+    Or(a=inverted15, b=loadmem, out=loadsignal); // arithmetic
+    // when in[15] is 0
+
+    // distribute load signal to registers
+    DMux8Way(in=loadsignal, sel=In[9..11], a=loadreg0, b=loadreg1, c=loadreg2, d=loadreg3, e=loadreg4, f=loadreg5, g=loadreg6, h=loadreg7);
+    // DEST register in[9.11] is selector, decide write to register or not
+
+    Register(in=Regin, load=loadreg0, out=reg0out);
+    Register(in=Regin, load=loadreg1, out=reg1out);
+    Register(in=Regin, load=loadreg2, out=reg2out);
+    Register(in=Regin, load=loadreg3, out=reg3out);
+    Register(in=Regin, load=loadreg4, out=reg4out);
+    Register(in=Regin, load=loadreg5, out=reg5out);
+    Register(in=Regin, load=loadreg6, out=reg6out);
+    Register(in=Regin, load=loadreg7, out=reg7out);
+
+
+    // 2. ALU  //
+
+    // source1 register only
+
+    Mux8Way16(a=reg0out, b=reg1out, c=reg2out, d=reg3out, e=reg4out, f=reg5out, g=reg6out, h=reg7out, sel=In[6..8], out=source1out, out=toM);
+
+    // source2  register or constant
+    
+    Mux8Way16(a=reg0out, b=reg1out, c=reg2out, d=reg3out, e=reg4out, f=reg5out, g=reg6out, h=reg7out, sel=In[3..5], out=source2temp);
+    And(a=inverted15, b=In[12], out=sourcesel);
+    Mux16(a=source2temp, b[6..15]=false, b[0..5]=In[0..5], sel=sourcesel, out=source2out);
+
+
+    ALU(AluOp=In[12..15], x=source1out, y=source2out, AluOut=ALUout, overflow=over);
+
+
+    // 3. Prepare the Memory Address addressM (in case of READ and Write), Memory Data toM (in case of Write or OUT)
+    
+    // addressM //
+
+    // 9..11 wirte and out, 6..8 read and input
+
+    And(a=In[15], b=inverted14, out=addm);
+
+    And(a=inverted13, b=inverted12, out=readadd);
+
+    And(a=addm, b=readadd, out=addsel); //addsel = 1 when read, 1000
+
+    Mux8Way16(a=reg0out, b=reg1out, c=reg2out, d=reg3out, e=reg4out, f=reg5out, g=reg6out, h=reg7out, sel=In[9..11], out=add9);
+    Mux16(a=add9, b=source1out, sel=addsel, out=addressM);
+
+
+    // input 10100000...
+
+    // 4. Generate the writeM signal (memory write for RAM or Screen)
+    // writeM is true if it is a Memory Write operation or a Screen OUT operation
+
+    // writeM //
+    
+    And(a=inverted12, b=In[13], out=write1);
+    And(a=In[15], b=inverted14, out=write2);
+    And(a=write1, b=write2, out=writeMem);  //write
+
+    And(a=In[14], b=In[15], out=O1);
+    And(a=inverted12, b=inverted13, out=O2);
+    And(a=O1, b=O2, out=outM); // out
+
+    Or(a=outM, b=writeMem, out=writeM); // if you write you out
+
+    
+    // 5. We load the PC with new value if there is a branch
+    // Branch can be conditional or unconditional
+    // Unconditional => In[15..12] = 1011
+    // Conditional => In[15..12] = 1001 && In[8..6]==000
+    // PC //
+
+    And(a=In[15], b=inverted14, out=unc1);
+    And(a=In[13], b=In[12], out=unc2);
+    And(a=unc1, b=unc2, out=unc);
+
+    And(a=In[15], b=inverted14, out=c1);
+    And(a=inverted13, b=In[12], out=c2);
+    And(a=c1, b=c2, out=c3);
+
+
+    NotOr16way(in=source1out, out=c4);
+
+    And(a=c4, b=c3, out=cond);
+    Or(a=cond, b=unc, out=pcload);
+    
+    PC(in=add9, load=pcload, inc=true, reset=Reset, out=PCOut);
+
+    // PC //
+} 
